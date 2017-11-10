@@ -12,15 +12,22 @@ xp=fst.ExperimentSimple(freqs=bands,noi_flat=noises,alpha_knee=-2.6,ell_knee=60.
                         fsky=0.05,name='SO_SAT')
 
 #Generate a sky model. See docstring for details on 
-sky=fst.SkyModel(r_prim=0.000,contain_dust_sync_corr=True,r_dust_sync=0.10)
-
+sky =fst.SkyModel(r_prim=0.000,beta_sync=-2.5,beta_dust=1.7)
+skyt=fst.SkyModel(r_prim=0.000)
 #Compute Fisher matrix.
 #Note that you can also use this function to compute Fisher bias associated to
 #differences between the true sky or experiment models and the assumed ones.
 #See docstrings for more details.
-fisher=fst.get_fisher_cl(xp,sky)
+fisher=fst.get_fisher_cl(xp,sky,sky_true=skyt)
 
 #Use Fisher structure to compute error on r
 print "r = %.3lE +- %.3lE (stat) +- %.3lE (syst)"%(fisher.get_value('r_prim'),
                                                    fisher.get_sigma('r_prim'),
                                                    fisher.get_bias('r_prim'))
+for i in np.arange(10) :
+    fisher=fst.get_fisher_cl(xp,sky,sky_true=skyt)
+    print "%d r = %.3lE +- %.3lE (stat) +- %.3lE (syst)"%(i,fisher.get_value('r_prim'),
+                                                          fisher.get_sigma('r_prim'),
+                                                          fisher.get_bias('r_prim'))
+    for p in fisher.get_param_names() :
+        sky.update_param(p,fisher.get_value(p)+fisher.get_bias(p))
