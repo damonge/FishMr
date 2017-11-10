@@ -426,6 +426,32 @@ class SkyModel(object) :
 
         self.ncomp=ncomp
 
+    def is_consistent(self) :
+        """
+        Returns True if the parameters of this sky model are consistent (False otherwise)
+        """
+        if self.contain_cmb :
+            if self.A_lens<0 : return False
+        if self.contain_sync :
+            if self.A_sync_BB<0 : return False
+            if self.A_sync_EB<0 : return False
+            if self.A_sync_EE<0 : return False
+        if self.contain_dust :
+            if self.A_dust_BB<0 : return False
+            if self.A_dust_EB<0 : return False
+            if self.A_dust_EE<0 : return False
+        if self.contain_CO1 :
+            if self.A_CO1_BB<0 : return False
+            if self.A_CO1_EB<0 : return False
+            if self.A_CO1_EE<0 : return False
+        if self.contain_CO2 :
+            if self.A_CO2_BB<0 : return False
+            if self.A_CO2_EB<0 : return False
+            if self.A_CO2_EE<0 : return False
+
+        return True
+            
+        
     def update_param(self,name,value) :
         """
         Update one of the parameters of this class.
@@ -1066,9 +1092,9 @@ def construct_parameters(sky) :
                              'label':'$A^{\\rm EE}_{\\rm dust}$'      ,'vary':True})
         pars_arr.append({'val':sky.alpha_dust,'dval':0.01 ,'name':'alpha_dust'  ,
                          'label':'$\\alpha_{\\rm dust}$','vary':True})
-        pars_arr.append({'val':sky.beta_dust,'dval':0.005,'name':'beta_dust'  ,
+        pars_arr.append({'val':sky.beta_dust,'dval':0.002,'name':'beta_dust'  ,
                          'label':'$\\beta_{\\rm dust}$' ,'vary':True})
-        pars_arr.append({'val':sky.temp_dust,'dval':0.5  ,'name':'temp_dust'  ,
+        pars_arr.append({'val':sky.temp_dust,'dval':0.1  ,'name':'temp_dust'  ,
                          'label':'$T_{\\rm dust}$'      ,'vary':True})
         pars_arr.append({'val':sky.nu0_dust,'dval':-1   ,'name':'nu0_dust',
                          'label':'$\\nu_{\\rm dust}$'   ,'vary':False})
@@ -1100,31 +1126,6 @@ def construct_parameters(sky) :
     pars_out=pd.DataFrame(pars_arr).to_records()
 
     return pars_out
-
-def index_params(pars) :
-    ind_par={}
-    ipar=0
-    #par0=[]
-    #dpar=[]
-    #sigmas=[]
-    for p in pars :
-        if p['vary'] :
-            ind_par[p['name']]=ipar
-            #par0.append(p['val'])
-            #dpar.append(p['dval'])
-            #sigmas.append(fsh.get_sigma(p['name']))
-            ipar+=1
-    npar_vary=ipar
-    for p in pars :
-        if not p['vary'] :
-            ind_par[p['name']]=ipar
-            ipar+=1
-    #par0=np.array(par0)
-    #dpar=np.array(dpar)
-    #sigmas=np.array(sigmas)
-
-    return ind_par,npar_vary
-    
 
 def get_fisher_cl(xpr,sky,lmin=30,lmax=300,xpr_true=None,sky_true=None) :
     """
