@@ -6,16 +6,28 @@ import healpy as hp
 import emcee as mc
 import time
 import os
+import sys
 
 #Unused yet
 nside=256
 
+if  len(sys.argv)!=6 :
+    print "Usage: study_shifts.py a_lens with_sdr with_shifts sigma_shifts seed"
+    exit(1)
+alens=float(sys.argv[1])
+if int(sys.argv[2])>0 : include_sdr=True
+else : include_sdr=False
+if int(sys.argv[3])>0 : perturb_shifts=True
+else : perturb_shifts=False
+shift_sigma=float(sys.argv[4])
+seed=int(sys.argv[5])
+
 #Run parameters
-perturb_shifts=False
-shift_sigma=0.01
-seed=1001
-include_sdr=False
-alens=1.0
+#perturb_shifts=False
+#shift_sigma=0.01
+#seed=1001
+#include_sdr=False
+#alens=1.0
 
 #Output prefix
 prefout="A%.1lf"%alens
@@ -28,6 +40,8 @@ if perturb_shifts :
     prefout+="_bshift_l%.3lf"%(np.log10(shift_sigma))
 if perturb_shifts :
     prefout+="_s%d"%seed
+print prefout
+exit(1)
 np.random.seed(seed)
     
 #Output files
