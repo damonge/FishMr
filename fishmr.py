@@ -5,6 +5,7 @@ from scipy.interpolate import interp1d
 import sys
 import os
 import healpy as hp
+import numdifftools  as nd
 
 AMIN2RAD=np.pi/180/60.
 
@@ -1217,4 +1218,13 @@ def get_fisher_from_like(l_k,p_0,d_p,a_d) :
             p1p2p=p1p2o.copy(); p1p2p[i2]+=dp2; l1p2p=l_k(p1p2p,a_d)
             fisher_m[i1,i2]=-(l1p2p-l1p2m-l1m2p+l1m2m)/(4*dp1*dp2)
             fisher_m[i2,i1]=fisher_m[i1,i2]
+    return fisher_m,fisher_v
+
+def get_fisher_from_like_precise(l_k,p_0,a_d) :
+    n_p=len(p_0)
+    def lkh(p):
+#        return np.sum(p**2)
+        return l_k(p,a_d)
+    fisher_v=nd.Gradient(lkh)(p_0)
+    fisher_m=-nd.Hessian(lkh)(p_0)
     return fisher_m,fisher_v
