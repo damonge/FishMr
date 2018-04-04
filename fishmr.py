@@ -4,7 +4,7 @@ import pandas as pd
 from scipy.interpolate import interp1d
 import sys
 import os
-import healpy as hp
+#import healpy as hp
 import numdifftools  as nd
 
 AMIN2RAD=np.pi/180/60.
@@ -31,7 +31,7 @@ def freq_evolve(spec_type,nu_0,beta,temp,fco,nu) :
     if spec_type=="BB" : #CMB
         return 1.
     elif spec_type=="PL" : #Synch
-        return (nu/nu_0)**beta/fcmb
+        return (nu/nu_0)**(beta+temp*np.log(nu/nu_0))/fcmb
     elif spec_type=="mBB" : #Dust
         x_to=0.0479924466*nu/temp
         x_from=0.0479924466*nu_0/temp
@@ -337,21 +337,21 @@ class SkyModel(object) :
                  contain_cmb=True,contain_E=False,contain_B=True,
                  cmb_model=None,r_prim=0.,A_lens=1.,
                  contain_sync=True,A_sync_BB=3.80,A_sync_EE=3.80,A_sync_EB=0.,
-                 alpha_sync=-0.60,beta_sync=-3.0,nu0_sync=23.,xi_sync=50.,
+                 alpha_sync=-0.60,beta_sync=-3.0,nu0_sync=23.,xi_sync=50.,c_sync=0.,
                  contain_dust=True,A_dust_BB=4.25,A_dust_EE=4.25,A_dust_EB=0.,
                  alpha_dust=-0.42,beta_dust=1.59,temp_dust=20.,nu0_dust=353.,xi_dust=50.,
                  contain_dust_sync_corr=False,r_dust_sync=0.0,
                  contain_CO1=False,A_CO1_BB=0.5,A_CO1_EE=0.5,A_CO1_EB=0.0,alpha_CO1=-0.42,
-                 contain_CO2=False,A_CO2_BB=0.5,A_CO2_EE=0.5,A_CO2_EB=0.0,alpha_CO2=-0.42) :
+                 contain_CO2=False,A_CO2_BB=0.5,A_CO2_EE=0.5,A_CO2_EB=0.0,alpha_CO2=-0.42,**kwargs) :
         """
         Initializes SkyModel structure
         contain_cmb: include cmb?
         contain_E: include both E and B?
         cmb_model: CMBModel structure (will create a new one if None)
         contain_sync: include synchrotron?
-        A_sync_BB, A_sync_EE, A_sync_EB, alpha_sync, beta_sync, nu0_sync, xi_sync:
+        A_sync_BB, A_sync_EE, A_sync_EB, alpha_sync, beta_sync, nu0_sync, xi_sync, c_sync:
                 D^sync_ell(nu1,nu2) = A_sync * (ell/80.)**alpha_sync *
-                                      f_sync(nu1,nu0_sync,beta_sync) * f_sync(nu2,nu0_sync,beta_sync) *
+                                      f_sync(nu1,nu0_sync,beta_sync) * f_sync(nu2,nu0_sync,beta_sync,c_sync) *
                                       exp[-0.5*(log(nu1/nu2)/xi_sync)**2]
         contain_dust: include dust?
         A_dust_BB, A_dust_EE, A_dust_EB, alpha_dust, beta_dust, temp_dust, nu0_dust, xi_dust:
@@ -373,7 +373,7 @@ class SkyModel(object) :
         self.contain_dust=contain_dust
         self.contain_CO1=contain_CO1
         self.contain_CO2=contain_CO2
-
+        
         ncomp=0
         if self.contain_cmb :
             if cmb_model is None :
@@ -391,6 +391,7 @@ class SkyModel(object) :
             self.A_sync_EB=A_sync_EB
             self.alpha_sync=alpha_sync
             self.beta_sync=beta_sync
+            self.c_sync=c_sync
             self.nu0_sync=nu0_sync
             self.xi_sync=xi_sync
             
@@ -593,7 +594,7 @@ class SkyModel(object) :
             icomp_cmb=icomp
             icomp+=1
         if self.contain_sync :
-            f_matrix[:,icomp]=freq_evolve("PL",self.nu0_sync,self.beta_sync,None,None,nus)
+            f_matrix[:,icomp]=freq_evolve("PL",self.nu0_sync,self.beta_sync,self.c_sync,None,nus)
             icomp_sync=icomp
             icomp+=1
         if self.contain_dust :
@@ -683,18 +684,15 @@ class ExperimentBase(object) :
         self.fsky=1.0
         self.freqs=np.array([150.])
         self.noi_flat=np.array([0.])
-        self.diam=5.
+        self.beam_sigmas=np.array([1.4])
         self.gains=np.array([1.])
         self.gst=GaussSt(len(self.freqs))
-
+        
     def getFsky(self) :
         return self.fsky
 
     def getFrequencies(self) :
         return self.freqs
-
-    def getDiameter(self) :
-        return self.diam
 
     def getNoiseFlat(self) :
         return self.noi_flat
@@ -752,6 +750,18 @@ class ExperimentBase(object) :
         mps_out[:,0,:]=maps[:,0,:]; mps_out[:,1,:]=maps[:,1,:];
         return mps_out
 
+def array_from_kws(string,dictio) :
+    ix=0
+    xs=[]
+    while string+"%d"%ix in dictio :
+        xs.append(dictio[string+"%d"%ix])
+        ix+=1
+    return np.array(xs)
+
+def beamsFromFreq(freqs,diam) :
+    beam_fwhm=1315.0/(freqs*diam)
+    return beam_fwhm
+
 class ExperimentSimple(ExperimentBase) :
     """
     Simple experiment with a bunch of frequencies, noise levels,
@@ -759,7 +769,7 @@ class ExperimentSimple(ExperimentBase) :
     """
 
     def __init__(self,fsky=None,name=None,freqs=None,gains=None,
-                 noi_flat=None,alpha_knee=None,ell_knee=None,diameter=None) :
+                 noi_flat=None,alpha_knee=None,ell_knee=None,beams=None,**kwargs) :
         """
         fsky: sky fraction
         name: experiment's name
@@ -768,41 +778,64 @@ class ExperimentSimple(ExperimentBase) :
         noi_flat: flat noise levels at each frequency (in uK_CMB arcmin)
         alpha_knee: knee exponent for non-flat noise
         ell_knee: knee multipole for non-flat noise
-        diameter: telescope diameter in meters
+        beams: beam FWHM in arcmin
         """
         self.typestr="Simple"
         if name is None : self.name="default"
         else : self.name=name
         if fsky is None : self.fsky=1.
         else : self.fsky=fsky
-        if diameter is None : self.diam=5.
-        else : self.diam=diameter
-        if freqs is None : self.freqs=np.array([150.])
-        else :
-            freqs=np.asarray(freqs)
-            if freqs.ndim==0 :
-                freqs=freqs[None]
-            self.freqs=freqs.copy()
-        if gains is None : self.gains=np.ones(len(self.freqs))*1.
+        
+        self.freqs=array_from_kws("freq",kwargs)
+        if len(self.freqs)==0 :
+            if freqs is None :
+                raise ValueError("No frequencies found")
+            else :
+                freqs=np.asarray(freqs)
+                if freqs.ndim==0 :
+                    freqs=freqs[None]
+                self.freqs=freqs.copy()
+            
+        if gains is None :
+            self.gains=array_from_kws("gain",kwargs)
+            if len(self.gains)==0 :
+                self.gains=np.ones(len(self.freqs))*1.
         else :
             if np.asarray(gains).ndim==0 :
-                self.gains=gains*np.ones(len(freqs))
+                self.gains=gains*np.ones(len(self.freqs))
             else :
-                if len(gains)!=len(self.freqs) :
-                    raise ValueError("gains and freqs should have the same number of elements")
                 self.gains=gains.copy()
-        if noi_flat is None : self.noi_flat=np.ones(len(self.freqs))*1E20
+        if len(self.gains)!=len(self.freqs) :
+            raise ValueError("gains and freqs should have the same number of elements")
+        
+        if noi_flat is None :
+            self.noi_flat=array_from_kws("noi_flat",kwargs)
+            if len(self.noi_flat)==0 :
+                self.noi_flat=np.ones(len(self.freqs))*1E20
         else :
             if np.asarray(noi_flat).ndim==0 :
-                self.noi_flat=noi_flat*np.ones(len(freqs))
+                self.noi_flat=noi_flat*np.ones(len(self.freqs))
             else :
-                if len(noi_flat)!=len(self.freqs) :
-                    raise ValueError("noi_flat and freqs should have the same number of elements")
                 self.noi_flat=noi_flat.copy()
+        if len(self.noi_flat)!=len(self.freqs) :
+            raise ValueError("noi_flat and freqs should have the same number of elements")
+
+        if beams is None :
+            beams_fwhm=array_from_kws("beam",kwargs)
+            if len(beams_fwhm)==0 :
+                self.beam_sigmas=np.ones(len(self.freqs))*1E-4
+        else :
+            if np.asarray(beams).ndim==0 :
+                self.beam_sigmas=np.ones(len(self.freqs))*AMIN2RAD*beams/2.355
+            else :
+                self.beam_sigmas=AMIN2RAD*beams/2.355
+        if len(self.beam_sigmas)!=len(self.freqs) :
+            raise ValueError("beams and freqs should have the same number of elements")
+
         if alpha_knee is None : self.alpha_knee=-1.9*np.ones(len(self.freqs))
         else :
             if np.asarray(alpha_knee).ndim==0 :
-                self.alpha_knee=alpha_knee*np.ones(len(freqs))
+                self.alpha_knee=alpha_knee*np.ones(len(self.freqs))
             else :
                 if len(alpha_knee)!=len(self.freqs) :
                     raise ValueError("alpha_knee and freqs should have the same number of elements")
@@ -810,12 +843,12 @@ class ExperimentSimple(ExperimentBase) :
         if ell_knee is None : self.ell_knee=np.ones(len(self.freqs))*0.01
         else :
             if np.asarray(ell_knee).ndim==0 :
-                self.ell_knee=ell_knee*np.ones(len(freqs))
+                self.ell_knee=ell_knee*np.ones(len(self.freqs))
             else :
                 if len(ell_knee)!=len(self.freqs) :
                     raise ValueError("ell_knee and freqs should have the same number of elements")
                 self.ell_knee=ell_knee.copy()
-        self.beam_sigmas=AMIN2RAD*1315.0/(2.355*self.freqs*self.diam)
+        
         self.gst=GaussSt(len(self.freqs))
                 
     def getNoiseCls(self,ells) :
@@ -856,7 +889,7 @@ class ExperimentDouble(ExperimentBase) :
     """
     Experiment made up of two separate telescopes.
     Both telescopes should have the same frequency channels,
-    but not necessarily the same noise properties or diameters.
+    but not necessarily the same noise properties or beams.
     """
 
     def __init__(self,name=None,freqs=None,gains=None,fsky=None,exp1=None,exp2=None) :
@@ -873,10 +906,10 @@ class ExperimentDouble(ExperimentBase) :
             raise ValueError("Incompatible experiments")
         self.exp1=ExperimentSimple(name=name,freqs=freqs,fsky=fsky,
                                    gains=gains,noi_flat=exp1.noi_flat,
-                                   alpha_knee=exp1.alpha_knee,ell_knee=exp1.ell_knee,diameter=exp1.diam)
+                                   alpha_knee=exp1.alpha_knee,ell_knee=exp1.ell_knee,beams=exp1.beam_sigmas*2.355/AMIN2RAD)
         self.exp2=ExperimentSimple(name=name,freqs=freqs,fsky=fsky,
                                    gains=gains,noi_flat=exp2.noi_flat,
-                                   alpha_knee=exp2.alpha_knee,ell_knee=exp2.ell_knee,diameter=exp2.diam)
+                                   alpha_knee=exp2.alpha_knee,ell_knee=exp2.ell_knee,beams=exp2.beam_sigmas*2.355/AMIN2RAD)
         self.typestr="Double"
         self.name=name
         self.fsky=fsky
@@ -1054,76 +1087,102 @@ def get_noiselevel(exper,add_CO_1=False,add_CO_2=False) :
 
     return np.sqrt(noise_comps[0,0])
 
-def construct_parameters(sky) :
-    pars_arr=[]
+def construct_parameters(sky,pars0=[]) :
+    pars_arr=pars0[:]
     if sky.contain_cmb :
         if sky.r_prim>0.001 :
             drprim=0.2*sky.r_prim
-            onesided=False
+            onesided=oFalse
         else :
             drprim=5E-4
             onesided=True
         pars_arr.append({'val':sky.r_prim ,'dval':drprim,'name':'r_prim'  ,
-                         'label':'$r$'                  ,'vary':True})
+                         'label':'$r$'                  ,'vary':True,
+                         'prior_th':[-1.,1.],'prior_gau':None})
         pars_arr.append({'val':sky.A_lens,'dval':0.01 ,'name':'A_lens'  ,
-                         'label':'$A_{\\rm lens}$'      ,'vary':True})
+                         'label':'$A_{\\rm lens}$'      ,'vary':True,
+                         'prior_th':[0.,2.],'prior_gau':None})
     if sky.contain_sync :
         pars_arr.append({'val':sky.A_sync_BB ,'dval':0.1  ,'name':'A_sync_BB'  ,
-                         'label':'$A^{\\rm BB}_{\\rm sync}$'      ,'vary':True})
+                         'label':'$A^{\\rm BB}_{\\rm sync}$'      ,'vary':True,
+                         'prior_th':[0.,1000.],'prior_gau':None})
         if sky.contain_E :
             pars_arr.append({'val':sky.A_sync_EB ,'dval':0.1  ,'name':'A_sync_EB'  ,
-                             'label':'$A^{\\rm EB}_{\\rm sync}$'      ,'vary':False})
+                             'label':'$A^{\\rm EB}_{\\rm sync}$'      ,'vary':False,
+                             'prior_th':None,'prior_gau':None})
             pars_arr.append({'val':sky.A_sync_EE ,'dval':0.1  ,'name':'A_sync_EE'  ,
-                             'label':'$A^{\\rm EE}_{\\rm sync}$'      ,'vary':True})
+                             'label':'$A^{\\rm EE}_{\\rm sync}$'      ,'vary':True,
+                             'prior_th':[0.,1000.],'prior_gau':None})
         pars_arr.append({'val':sky.alpha_sync,'dval':0.01 ,'name':'alpha_sync'  ,
-                         'label':'$\\alpha_{\\rm sync}$','vary':True})
+                         'label':'$\\alpha_{\\rm sync}$','vary':True,
+                         'prior_th':None,'prior_gau':None})
         pars_arr.append({'val':sky.beta_sync,'dval':0.005,'name':'beta_sync'  ,
-                         'label':'$\\beta_{\\rm sync}$' ,'vary':True})
+                         'label':'$\\beta_{\\rm sync}$' ,'vary':True,
+                         'prior_th':None,'prior_gau':None})
         pars_arr.append({'val':sky.nu0_sync,'dval':-1   ,'name':'nu0_sync',
-                         'label':'$\\nu_{\\rm sync}$'   ,'vary':False})
+                         'label':'$\\nu_{\\rm sync}$'   ,'vary':False,
+                         'prior_th':None,'prior_gau':None})
         pars_arr.append({'val':sky.xi_sync  ,'dval':0.2  ,'name':'xi_sync'   ,
-                         'label':'$\\xi_{\\rm sync}$'   ,'vary':False})
+                         'label':'$\\xi_{\\rm sync}$'   ,'vary':False,
+                         'prior_th':None,'prior_gau':None})
     if sky.contain_dust :
         pars_arr.append({'val':sky.A_dust_BB,'dval':0.1  ,'name':'A_dust_BB'  ,
-                         'label':'$A^{\\rm BB}_{\\rm dust}$'      ,'vary':True})
+                         'label':'$A^{\\rm BB}_{\\rm dust}$'      ,'vary':True,
+                         'prior_th':[0,1000.],'prior_gau':None})
         if sky.contain_E :
             pars_arr.append({'val':sky.A_dust_EB,'dval':0.1  ,'name':'A_dust_EB'  ,
-                             'label':'$A^{\\rm EB}_{\\rm dust}$'      ,'vary':False})
+                             'label':'$A^{\\rm EB}_{\\rm dust}$'      ,'vary':False,
+                             'prior_th':None,'prior_gau':None})
             pars_arr.append({'val':sky.A_dust_EE,'dval':0.1  ,'name':'A_dust_EE'  ,
-                             'label':'$A^{\\rm EE}_{\\rm dust}$'      ,'vary':True})
+                             'label':'$A^{\\rm EE}_{\\rm dust}$'      ,'vary':True,
+                             'prior_th':[0.,1000.],'prior_gau':None})
         pars_arr.append({'val':sky.alpha_dust,'dval':0.01 ,'name':'alpha_dust'  ,
-                         'label':'$\\alpha_{\\rm dust}$','vary':True})
+                         'label':'$\\alpha_{\\rm dust}$','vary':True,
+                         'prior_th':None,'prior_gau':None})
         pars_arr.append({'val':sky.beta_dust,'dval':0.002,'name':'beta_dust'  ,
-                         'label':'$\\beta_{\\rm dust}$' ,'vary':True})
+                         'label':'$\\beta_{\\rm dust}$' ,'vary':True,
+                         'prior_th':None,'prior_gau':None})
         pars_arr.append({'val':sky.temp_dust,'dval':0.1  ,'name':'temp_dust'  ,
-                         'label':'$T_{\\rm dust}$'      ,'vary':True})
+                         'label':'$T_{\\rm dust}$'      ,'vary':True,
+                         'prior_th':[10.,30.],'prior_gau':None})
         pars_arr.append({'val':sky.nu0_dust,'dval':-1   ,'name':'nu0_dust',
-                         'label':'$\\nu_{\\rm dust}$'   ,'vary':False})
+                         'label':'$\\nu_{\\rm dust}$'   ,'vary':False,
+                         'prior_th':None,'prior_gau':None})
         pars_arr.append({'val':sky.xi_dust ,'dval':0.2  ,'name':'xi_dust'   ,
-                         'label':'$\\xi_{\\rm dust}$'   ,'vary':False})
+                         'label':'$\\xi_{\\rm dust}$'   ,'vary':False,
+                         'prior_th':None,'prior_gau':None})
     if sky.contain_dust_sync_corr :
         pars_arr.append({'val':sky.r_dust_sync,'dval':0.1  ,'name':'r_dust_sync'  ,
-                         'label':'$r_{\\rm d-s}$'       ,'vary':True})
+                         'label':'$r_{\\rm d-s}$'       ,'vary':True,
+                         'prior_th':None,'prior_gau':None})
     if sky.contain_CO1 :
         pars_arr.append({'val':sky.A_CO1_BB,'dval':0.05 ,'name':'A_CO1_BB'   ,
-                         'label':'$A^{1BB}_{\\rm CO}$'      ,'vary':True})
+                         'label':'$A^{1BB}_{\\rm CO}$'      ,'vary':True,
+                         'prior_th':[0,1000.],'prior_gau':None})
         if sky.contain_E :
             pars_arr.append({'val':sky.A_CO1_EB,'dval':0.05 ,'name':'A_CO1_EB'   ,
-                             'label':'$A^{1EB}_{\\rm CO}$'      ,'vary':False})
+                             'label':'$A^{1EB}_{\\rm CO}$'      ,'vary':False,
+                             'prior_th':None,'prior_gau':None})
             pars_arr.append({'val':sky.A_CO1_EE,'dval':0.05 ,'name':'A_CO1_EE'   ,
-                             'label':'$A^{1EE}_{\\rm CO}$'      ,'vary':True})
+                             'label':'$A^{1EE}_{\\rm CO}$'      ,'vary':True,
+                             'prior_th':[0.,1000.],'prior_gau':None})
         pars_arr.append({'val':sky.alpha_CO1,'dval':0.1  ,'name':'alpha_CO1'   ,
-                         'label':'$\\alpha^1_{\\rm CO}$','vary':True})
+                         'label':'$\\alpha^1_{\\rm CO}$','vary':True,
+                         'prior_th':None,'prior_gau':None})
     if sky.contain_CO2 :
         pars_arr.append({'val':sky.A_CO2_BB,'dval':0.05 ,'name':'A_CO2_BB'   ,
-                         'label':'$A^{2BB}_{\\rm CO}$'      ,'vary':True})
+                         'label':'$A^{2BB}_{\\rm CO}$'      ,'vary':True,
+                         'prior_th':[0.,1000.],'prior_gau':None})
         if sky.contain_E :
             pars_arr.append({'val':sky.A_CO2_EB,'dval':0.05 ,'name':'A_CO2_EB'   ,
-                             'label':'$A^{2EB}_{\\rm CO}$'      ,'vary':False})
+                             'label':'$A^{2EB}_{\\rm CO}$'      ,'vary':False,
+                             'prior_th':None,'prior_gau':None})
             pars_arr.append({'val':sky.A_CO2_EE,'dval':0.05 ,'name':'A_CO2_EE'   ,
-                             'label':'$A^{2EE}_{\\rm CO}$'      ,'vary':True}) 
+                             'label':'$A^{2EE}_{\\rm CO}$'      ,'vary':True,
+                             'prior_th':[0.,1000.],'prior_gau':None})
         pars_arr.append({'val':sky.alpha_CO2,'dval':0.1  ,'name':'alpha_CO2'   ,
-                         'label':'$\\alpha^2_{\\rm CO}$','vary':True})
+                         'label':'$\\alpha^2_{\\rm CO}$','vary':True,
+                         'prior_th':None,'prior_gau':None})
     pars_out=pd.DataFrame(pars_arr).to_records()
 
     return pars_out
